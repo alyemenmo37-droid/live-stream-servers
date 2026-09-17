@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📺 مشاهدة البث المباشر</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0a1a;
+            color: white;
+            text-align: center;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 900px;
+            width: 100%;
+            background: #1a1a2e;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+        }
+        h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+            color: #e94560;
+        }
+        .subtitle {
+            color: #8892b0;
+            margin-bottom: 20px;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+        .controls input {
+            padding: 12px 20px;
+            border-radius: 10px;
+            border: 2px solid #233554;
+            background: #0a0a1a;
+            color: white;
+            font-size: 16px;
+            min-width: 200px;
+            flex: 1;
+        }
+        .controls button {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .btn-join {
+            background: #e94560;
+            color: white;
+        }
+        .btn-join:hover {
+            background: #c73652;
+            transform: scale(1.02);
+        }
+        .btn-leave {
+            background: #495670;
+            color: white;
+        }
+        .btn-leave:hover {
+            background: #5a6a8a;
+        }
+        #status {
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+            background: #0a0a1a;
+            font-size: 16px;
+            color: #8892b0;
+        }
+        #status.error {
+            color: #e94560;
+        }
+        #status.info {
+            color: #ffd700;
+        }
+        .video-wrapper {
+            background: #0a0a1a;
+            border-radius: 15px;
+            overflow: hidden;
+            position: relative;
+            margin: 15px 0;
+            min-height: 300px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #remoteVideo {
+            width: 100%;
+            max-height: 70vh;
+            background: #0a0a1a;
+            display: block;
+        }
+        .video-placeholder {
+            color: #495670;
+            font-size: 18px;
+            padding: 40px;
+            position: absolute;
+        }
+        .stream-info {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            color: #8892b0;
+            font-size: 14px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .stream-info span {
+            background: #0a0a1a;
+            padding: 5px 15px;
+            border-radius: 20px;
+        }
+        .stream-info .count {
+            color: #64ffda;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📺 مشاهدة البث المباشر</h1>
+        <p class="subtitle">أدخل معرف البث لمشاهدة البث المباشر</p>
+
+        <div class="controls">
+            <input type="text" id="streamIdInput" placeholder="معرف البث (مثال: stream_123)" value="">
+            <button class="btn-join" onclick="joinStream()">🔗 مشاهدة</button>
+            <button class="btn-leave" onclick="leaveStream()">⏹️ إيقاف</button>
+        </div>
+
+        <div id="status">⏳ أدخل معرف البث و اضغط مشاهدة</div>
+
+        <div class="video-wrapper">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <div class="video-placeholder" id="placeholder">📺 انتظار البث...</div>
+        </div>
+
+        <div class="stream-info">
+            <span>📡 الحالة: <span id="streamStatus">غير متصل</span></span>
+            <span>👁️ المشاهدون: <span class="count" id="viewerCount">0</span></span>
+            <span>🆔 المعرف: <span id="currentStreamId">-</span></span>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        let socket = null;
+        let peerConnection = null;
+        let streamId = '';
+        let broadcasterId = '';
+
+        // ===== ✅ إعدادات WebRTC مع TURN Servers =====
+        const config = {
+            iceServers: [
+                // STUN Servers
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+
+                // TURN Servers (OpenRelay - مجاني)
+                {
+                    urls: 'turn:openrelay.metered.ca:80',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                {
+                    urls: 'turn:openrelay.metered.ca:443',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                {
+                    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                }
+            ],
+            iceCandidatePoolSize: 10,
+            iceTransportPolicy: 'all'
+        };
+
+        // ===== 🎯 الحصول على معرف البث من الرابط =====
+        function getStreamIdFromURL() {
+            const params = new URLSearchParams(window.location.search);
+            return params.get('streamId') || '';
+        }
+
+        // ===== 🔗 الاتصال بالبث =====
+        function joinStream() {
+            streamId = document.getElementById('streamIdInput').value.trim();
+            if (!streamId) {
+                streamId = getStreamIdFromURL();
+                if (!streamId) {
+                    setStatus('⚠️ الرجاء إدخال معرف البث', 'error');
+                    return;
+                }
+                document.getElementById('streamIdInput').value = streamId;
+            }
+
+            setStatus('🔄 جاري الاتصال بالخادم...', 'info');
+            document.getElementById('currentStreamId').textContent = streamId;
+
+            if (socket) {
+                socket.disconnect();
+            }
+
+            socket = io();
+
+            socket.on('connect', () => {
+                setStatus('✅ متصل بالخادم، جاري البحث عن البث...', 'info');
+                socket.emit('watch_stream', {
+                    streamId: streamId,
+                    viewerId: socket.id
+                });
+            });
+
+            socket.on('stream_ready', (data) => {
+                setStatus('📺 جاري الاتصال بالبث...', 'info');
+                document.getElementById('streamStatus').textContent = 'جاري الاتصال';
+                document.getElementById('viewerCount').textContent = data.viewers || 0;
+                broadcasterId = data.broadcasterId;
+                createOffer(broadcasterId);
+            });
+
+            socket.on('stream_not_found', (data) => {
+                setStatus('❌ ' + data.message, 'error');
+                document.getElementById('streamStatus').textContent = 'غير متاح';
+                document.getElementById('placeholder').style.display = 'block';
+            });
+
+            socket.on('broadcast_started', (data) => {
+                setStatus('📺 البث قيد التشغيل!', 'info');
+                document.getElementById('streamStatus').textContent = 'نشط ✅';
+                document.getElementById('placeholder').style.display = 'none';
+            });
+
+            socket.on('stream_ended', (data) => {
+                setStatus('⏹️ انتهى البث', 'error');
+                document.getElementById('streamStatus').textContent = 'انتهى';
+                document.getElementById('placeholder').style.display = 'block';
+                closePeerConnection();
+            });
+
+            socket.on('answer', (data) => {
+                handleAnswer(data);
+            });
+
+            socket.on('candidate', (data) => {
+                handleCandidate(data);
+            });
+
+            socket.on('disconnect', () => {
+                setStatus('❌ تم قطع الاتصال بالخادم', 'error');
+                document.getElementById('streamStatus').textContent = 'غير متصل';
+                closePeerConnection();
+            });
+
+            socket.on('connect_error', (error) => {
+                setStatus('❌ خطأ في الاتصال: ' + error.message, 'error');
+            });
+        }
+
+        // ===== 📨 إنشاء Offer =====
+        function createOffer(targetId) {
+            closePeerConnection();
+
+            peerConnection = new RTCPeerConnection(config);
+            peerConnection.addTransceiver('video', { direction: 'recvonly' });
+            peerConnection.addTransceiver('audio', { direction: 'recvonly' });
+
+            peerConnection.ontrack = (event) => {
+                if (event.streams && event.streams[0]) {
+                    const video = document.getElementById('remoteVideo');
+                    video.srcObject = event.streams[0];
+                    setStatus('📺 جاري مشاهدة البث...', 'info');
+                    document.getElementById('streamStatus').textContent = 'مشاهدة ✅';
+                    document.getElementById('placeholder').style.display = 'none';
+                }
+            };
+
+            peerConnection.oniceconnectionstatechange = () => {
+                console.log('ICE State:', peerConnection.iceConnectionState);
+                if (peerConnection.iceConnectionState === 'connected') {
+                    setStatus('📺 البث يعمل!', 'info');
+                    document.getElementById('streamStatus').textContent = 'مشاهدة ✅';
+                } else if (peerConnection.iceConnectionState === 'disconnected' ||
+                           peerConnection.iceConnectionState === 'failed') {
+                    setStatus('⚠️ انقطع الاتصال بالبث', 'error');
+                    document.getElementById('streamStatus').textContent = 'منقطع';
+                }
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate && socket) {
+                    socket.emit('candidate', {
+                        candidate: {
+                            candidate: event.candidate.candidate,
+                            sdpMid: event.candidate.sdpMid,
+                            sdpMLineIndex: event.candidate.sdpMLineIndex
+                        },
+                        targetId: targetId
+                    });
+                }
+            };
+
+            peerConnection.createOffer()
+                .then(offer => peerConnection.setLocalDescription(offer))
+                .then(() => {
+                    if (socket) {
+                        socket.emit('offer', {
+                            sdp: peerConnection.localDescription.sdp,
+                            targetId: targetId
+                        });
+                    }
+                })
+                .catch(error => console.error('Error creating offer:', error));
+        }
+
+        // ===== 📨 معالجة Answer =====
+        function handleAnswer(data) {
+            if (peerConnection) {
+                let sdp = data.sdp || data;
+                const answer = new RTCSessionDescription({
+                    type: 'answer',
+                    sdp: sdp
+                });
+                peerConnection.setRemoteDescription(answer)
+                    .catch(error => console.error('Error setting answer:', error));
+            }
+        }
+
+        // ===== 📨 معالجة Candidate =====
+        function handleCandidate(data) {
+            if (peerConnection) {
+                try {
+                    let candidateData;
+                    if (data.candidate) {
+                        candidateData = data.candidate;
+                    } else {
+                        candidateData = data;
+                    }
+                    
+                    const candidate = new RTCIceCandidate({
+                        candidate: candidateData.candidate,
+                        sdpMid: candidateData.sdpMid,
+                        sdpMLineIndex: candidateData.sdpMLineIndex
+                    });
+                    peerConnection.addIceCandidate(candidate)
+                        .catch(error => console.error('Error adding candidate:', error));
+                } catch (error) {
+                    console.error('Error parsing candidate:', error);
+                }
+            }
+        }
+
+        // ===== ⏹️ مغادرة البث =====
+        function leaveStream() {
+            if (socket) {
+                socket.emit('leave_room', { streamId: streamId });
+                socket.disconnect();
+                socket = null;
+            }
+            closePeerConnection();
+            document.getElementById('remoteVideo').srcObject = null;
+            document.getElementById('placeholder').style.display = 'block';
+            document.getElementById('streamStatus').textContent = 'غير متصل';
+            document.getElementById('viewerCount').textContent = '0';
+            document.getElementById('currentStreamId').textContent = '-';
+            setStatus('⏹️ تم مغادرة البث', 'info');
+        }
+
+        // ===== 🔒 إغلاق PeerConnection =====
+        function closePeerConnection() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+        }
+
+        // ===== 📝 تحديث الحالة =====
+        function setStatus(message, type = 'info') {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = type;
+        }
+
+        // ===== 🔄 الاتصال التلقائي إذا كان هناك معرف في الرابط =====
+        window.onload = function() {
+            const streamIdFromURL = getStreamIdFromURL();
+            if (streamIdFromURL) {
+                document.getElementById('streamIdInput').value = streamIdFromURL;
+                setTimeout(joinStream, 500);
+            }
+        };
+    </script>
+</body>
+</html>
+
