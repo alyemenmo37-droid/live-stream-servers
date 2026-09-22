@@ -203,6 +203,23 @@ io.on('connection', (socket) => {
             }
         }
     });
+
+    // ===== 💬 حدث عام لتمرير أي رسالة بين أي طرفين =====
+    socket.on("relay_message", (data) => {
+        const { targetId, type, payload } = data;
+        if (!targetId) {
+            console.log(`⚠️ relay_message بدون targetId من ${socket.id}`);
+            return;
+        }
+        console.log(`💬 relay ${type} من ${socket.id} إلى ${targetId}`);
+        io.to(targetId).emit("relay_message", {
+            fromId: socket.id,
+            type: type,
+            payload: payload,
+            timestamp: Date.now()
+        });
+    });
+
 });
 
 // ===== 📊 صفحة حالة الخادم =====
