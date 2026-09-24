@@ -19,7 +19,6 @@ const io = socketIO(server, {
 // ===== 📊 تخزين الغرف والبث =====
 const rooms = {};
 
-// ===== 📝 سجل الأحداث =====
 console.log('🚀 بدء تشغيل خادم البث المباشر...');
 
 // ===== 🔗 اتصال Socket.IO =====
@@ -29,8 +28,7 @@ io.on('connection', (socket) => {
     // ===== 📺 بدء البث =====
     socket.on('start_broadcast', (streamId) => {
         console.log(`📺 بدء البث: ${streamId} من ${socket.id}`);
-        
-        // إنشاء غرفة جديدة إذا لم تكن موجودة
+
         if (!rooms[streamId]) {
             rooms[streamId] = {
                 broadcaster: socket.id,
@@ -42,49 +40,65 @@ io.on('connection', (socket) => {
             rooms[streamId].broadcaster = socket.id;
             rooms[streamId].active = true;
         }
-        
+
         socket.join(streamId);
         socket.streamId = streamId;
         socket.role = 'broadcaster';
-        
+
+        // ⭐ أرسل للمُرسِل الجديد قائمة المشاهدين الحاليين
+        const currentViewers = rooms[streamId].viewers || [];
+        socket.emit('existing_viewers', {
+            streamId: streamId,
+            viewers: currentViewers
+        });
+        console.log(`📋 أرسلت ${currentViewers.length} مشاهد حالي إلى ${socket.id}`);
+
+        // ⭐ اطلب من كل مشاهد حالي إعادة الإرسال (تأكيد)
+        currentViewers.forEach(viewerId => {
+            io.to(viewerId).emit('broadcaster_ready', {
+                streamId: streamId,
+                broadcasterId: socket.id
+            });
+        });
+
         // إعلام الجميع ببدء البث
         io.to(streamId).emit('broadcast_started', {
             streamId: streamId,
             broadcasterId: socket.id
         });
-        
+
         console.log(`✅ البث نشط في الغرفة: ${streamId}`);
     });
 
     // ===== 👁️ مشاهدة البث =====
     socket.on('watch_stream', (data) => {
         const { streamId, viewerId } = data;
-        
+
         console.log(`👁️ مشاهد ${viewerId || socket.id} يريد مشاهدة ${streamId}`);
-        
+
         if (rooms[streamId] && rooms[streamId].active) {
             socket.join(streamId);
             socket.streamId = streamId;
             socket.role = 'viewer';
-            
-            // إضافة المشاهد إلى القائمة
+
+            // إضافة المشاهد إلى القائمة (منع التكرار)
             if (!rooms[streamId].viewers.includes(socket.id)) {
                 rooms[streamId].viewers.push(socket.id);
             }
-            
+
             // إعلام المشاهد بأن البث جاهز
             socket.emit('stream_ready', {
                 streamId: streamId,
                 broadcasterId: rooms[streamId].broadcaster,
                 viewers: rooms[streamId].viewers.length
             });
-            
+
             // إعلام البث بوجود مشاهد جديد
             io.to(rooms[streamId].broadcaster).emit('viewer_joined', {
                 viewerId: socket.id,
                 count: rooms[streamId].viewers.length
             });
-            
+
             console.log(`✅ مشاهد ${socket.id} انضم إلى ${streamId}`);
         } else {
             socket.emit('stream_not_found', {
@@ -97,8 +111,8 @@ io.on('connection', (socket) => {
     // ===== 📨 إشارات WebRTC =====
     socket.on('offer', (data) => {
         const { streamId, sdp, targetId } = data;
-        console.log(`📨 Offer من ${socket.id} إلى ${targetId || 'الجميع'}`);
-        
+        console.log(`📨 Offer من ${socket.id} إلى ${targetId ||  الجميع }`);
+
         if (targetId) {
             io.to(targetId).emit('offer', {
                 sdp: sdp,
@@ -115,7 +129,7 @@ io.on('connection', (socket) => {
     socket.on('answer', (data) => {
         const { streamId, sdp, targetId } = data;
         console.log(`📨 Answer من ${socket.id} إلى ${targetId}`);
-        
+
         io.to(targetId).emit('answer', {
             sdp: sdp,
             fromId: socket.id
@@ -125,7 +139,7 @@ io.on('connection', (socket) => {
     socket.on('candidate', (data) => {
         const { streamId, candidate, targetId } = data;
         console.log(`📨 Candidate من ${socket.id}`);
-        
+
         if (targetId) {
             io.to(targetId).emit('candidate', {
                 candidate: candidate,
@@ -143,14 +157,13 @@ io.on('connection', (socket) => {
     socket.on('stop_broadcast', (data) => {
         const { streamId } = data;
         console.log(`⏹️ طلب إيقاف البث: ${streamId} من ${socket.id}`);
-        
+
         if (rooms[streamId]) {
             rooms[streamId].active = false;
             io.to(streamId).emit('stream_ended', {
                 streamId: streamId
             });
-            
-            // تنظيف الغرفة بعد 5 دقائق
+
             setTimeout(() => {
                 if (rooms[streamId] && !rooms[streamId].active) {
                     delete rooms[streamId];
@@ -164,58 +177,35 @@ io.on('connection', (socket) => {
     socket.on('leave_room', (data) => {
         const { streamId } = data;
         console.log(`👋 مغادرة الغرفة: ${streamId} من ${socket.id}`);
-        
+
         if (streamId && rooms[streamId]) {
-            // إزالة المشاهد من القائمة
             rooms[streamId].viewers = rooms[streamId].viewers.filter(id => id !== socket.id);
-            
-            // إعلام البث بأن مشاهداً غادر
+
             io.to(rooms[streamId].broadcaster).emit('viewer_left', {
                 viewerId: socket.id,
                 count: rooms[streamId].viewers.length
             });
         }
-        
+
         socket.leave(streamId);
         socket.streamId = null;
         socket.role = null;
     });
 
     // ===== 🔌 قطع الاتصال =====
-/*    socket.on('disconnect', () => {
-        console.log(`🔴 غير متصل: ${socket.id}`);
-        
-        // إذا كان المستخدم بثاً مباشراً
-        if (socket.streamId && rooms[socket.streamId]) {
-            if (rooms[socket.streamId].broadcaster === socket.id) {
-                rooms[socket.streamId].active = false;
-                io.to(socket.streamId).emit('stream_ended', {
-                    streamId: socket.streamId
-                });
-                console.log(`⏹️ توقف البث (انقطع البث): ${socket.streamId}`);
-            } else {
-                // إزالة المشاهد
-                rooms[socket.streamId].viewers = rooms[socket.streamId].viewers.filter(id => id !== socket.id);
-                io.to(rooms[socket.streamId].broadcaster).emit('viewer_left', {
-                    viewerId: socket.id,
-                    count: rooms[socket.streamId].viewers.length
-                });
-            }
-        }
-    });*/
-
-    socket.on("disconnect", () => {
+    socket.on('disconnect', () => {
         console.log(`🔴 غير متصل: ${socket.id}`);
 
         if (socket.streamId && rooms[socket.streamId]) {
             if (rooms[socket.streamId].broadcaster === socket.id) {
-                // ⭐ لا نُلغي — فقط نُعلِم
-                io.to(socket.streamId).emit("broadcaster_disconnected", {
-                    streamId: socket.streamId
+                // ⭐ لا نُلغي الغرفة — فقط نُعلِم
+                io.to(socket.streamId).emit('broadcaster_disconnected', {
+                    streamId: socket.streamId,
+                    message: 'الباث انقطع مؤقتًا'
                 });
                 console.log(`⚠️ الباث انقطع مؤقتًا: ${socket.streamId}`);
 
-                // ⭐ احتفظ بالغرفة 24 ساعة (بدل 5 دقائق)
+                // ⭐ احتفظ بالغرفة 24 ساعة
                 setTimeout(() => {
                     if (rooms[socket.streamId] &&
                         rooms[socket.streamId].broadcaster === socket.id) {
@@ -226,9 +216,8 @@ io.on('connection', (socket) => {
                 }, 86400000); // 24 ساعة
             } else {
                 // مشاهد غادر
-                rooms[socket.streamId].viewers =
-                    rooms[socket.streamId].viewers.filter(id => id !== socket.id);
-                io.to(rooms[socket.streamId].broadcaster).emit("viewer_left", {
+                rooms[socket.streamId].viewers = rooms[socket.streamId].viewers.filter(id => id !== socket.id);
+                io.to(rooms[socket.streamId].broadcaster).emit('viewer_left', {
                     viewerId: socket.id,
                     count: rooms[socket.streamId].viewers.length
                 });
@@ -236,35 +225,36 @@ io.on('connection', (socket) => {
         }
     });
 
-    // ===== 💬 حدث عام لتمرير أي رسالة بين أي طرفين =====
-    socket.on("relay_message", (data) => {
+    // ===== 💬 حدث عام لتمرير أي رسالة =====
+    socket.on('relay_message', (data) => {
         const { targetId, type, payload } = data;
         if (!targetId) {
             console.log(`⚠️ relay_message بدون targetId من ${socket.id}`);
             return;
         }
         console.log(`💬 relay ${type} من ${socket.id} إلى ${targetId}`);
-        io.to(targetId).emit("relay_message", {
+        io.to(targetId).emit('relay_message', {
             fromId: socket.id,
             type: type,
             payload: payload,
             timestamp: Date.now()
         });
     });
-    // ===== 🏓 Ping / Pong عبر relay =====
-    socket.on("ping_target", (data) => {
+
+    // ===== 🏓 Ping / Pong =====
+    socket.on('ping_target', (data) => {
         const { targetId } = data;
         if (!targetId) return;
-        io.to(targetId).emit("ping_received", {
+        io.to(targetId).emit('ping_received', {
             fromId: socket.id,
             timestamp: Date.now()
         });
     });
 
-    socket.on("pong_reply", (data) => {
+    socket.on('pong_reply', (data) => {
         const { targetId } = data;
         if (!targetId) return;
-        io.to(targetId).emit("pong_received", {
+        io.to(targetId).emit('pong_received', {
             fromId: socket.id,
             timestamp: Date.now()
         });
@@ -292,7 +282,6 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 خادم البث يعمل على http://0.0.0.0:${PORT}`);
-    console.log(`📺 صفحة المشاهدة: http://0.0.0.0:${PORT}`);
     console.log(`📊 حالة الخادم: http://0.0.0.0:${PORT}/status`);
     console.log(`👥 جاهز لاستقبال الاتصالات...`);
 });
