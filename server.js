@@ -182,7 +182,7 @@ io.on('connection', (socket) => {
     });
 
     // ===== 🔌 قطع الاتصال =====
-    socket.on('disconnect', () => {
+/*    socket.on('disconnect', () => {
         console.log(`🔴 غير متصل: ${socket.id}`);
         
         // إذا كان المستخدم بثاً مباشراً
@@ -202,6 +202,38 @@ io.on('connection', (socket) => {
                 });
             }
         }
+    });*/
+
+    socket.on("disconnect", () => {
+        console.log(`🔴 غير متصل: ${socket.id}`);
+
+        if (socket.streamId && rooms[socket.streamId]) {
+            if (rooms[socket.streamId].broadcaster === socket.id) {
+                // ⭐ لا نُلغي — فقط نُعلِم
+                io.to(socket.streamId).emit("broadcaster_disconnected", {
+                    streamId: socket.streamId
+                });
+                console.log(`⚠️ الباث انقطع مؤقتًا: ${socket.streamId}`);
+
+                // ⭐ احتفظ بالغرفة 24 ساعة (بدل 5 دقائق)
+                setTimeout(() => {
+                    if (rooms[socket.streamId] &&
+                        rooms[socket.streamId].broadcaster === socket.id) {
+                        rooms[socket.streamId].active = false;
+                        delete rooms[socket.streamId];
+                        console.log(`🧹 تنظيف الغرفة: ${socket.streamId}`);
+                    }
+                }, 86400000); // 24 ساعة
+            } else {
+                // مشاهد غادر
+                rooms[socket.streamId].viewers =
+                    rooms[socket.streamId].viewers.filter(id => id !== socket.id);
+                io.to(rooms[socket.streamId].broadcaster).emit("viewer_left", {
+                    viewerId: socket.id,
+                    count: rooms[socket.streamId].viewers.length
+                });
+            }
+        }
     });
 
     // ===== 💬 حدث عام لتمرير أي رسالة بين أي طرفين =====
@@ -216,6 +248,24 @@ io.on('connection', (socket) => {
             fromId: socket.id,
             type: type,
             payload: payload,
+            timestamp: Date.now()
+        });
+    });
+    // ===== 🏓 Ping / Pong عبر relay =====
+    socket.on("ping_target", (data) => {
+        const { targetId } = data;
+        if (!targetId) return;
+        io.to(targetId).emit("ping_received", {
+            fromId: socket.id,
+            timestamp: Date.now()
+        });
+    });
+
+    socket.on("pong_reply", (data) => {
+        const { targetId } = data;
+        if (!targetId) return;
+        io.to(targetId).emit("pong_received", {
+            fromId: socket.id,
             timestamp: Date.now()
         });
     });
